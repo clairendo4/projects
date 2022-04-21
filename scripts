@@ -1,0 +1,109 @@
+import io
+
+import boto3
+import sys
+import pymysql
+import pandas as pd
+from sqlalchemy import create_engine
+from io import BytesIO
+import datetime
+from awsglue.utils import getResolvedOptions
+from datetime import date
+
+
+
+
+
+chunksize = 500
+
+
+class Start:
+    def __init__(self, aws_client: classmethod):
+        self.client = aws_client
+        self.bucket = "methodist-sftp"
+        self.objectkey = "eligibility/20220412_NMHSNEHIIATTRIBUTION.csv"
+        
+
+    def get_s3_object_data(self) -> pd.core:
+        content = ''
+
+        response = self.client.get_object(
+            Bucket=self.bucket,
+            Key=self.objectkey
+        )
+
+        if not str(response["ResponseMetadata"]["HTTPStatusCode"]).startswith("20"):
+            print(response)
+
+        else:
+            try:
+                data = BytesIO(response["Body"].read())
+                content = pd.read_csv(data, sep="|", encoding='windows-1252',parse_dates=['DOB'])
+
+            except Exception as e:
+                sys.exit(f'Error: {e}')
+
+        return content
+
+
+class DB:
+    args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+    
+    def __init__(self):
+        self.host = "nehii-cluster.cluster-cnaruhcvgrgq.us-east-1.rds.amazonaws.com"
+        self.user = "username"
+        self.passwd = "password"
+        self.port = "3306"
+        self.db = "IS_Raw_NMHS"
+        self.table = "nmhs_test"
+        # self.timestamp = date.today()
+        # self.job_run_id = self.args['JOB_RUN_ID'] 
+        
+
+
+    def input_data_to_sql(self, data: pd.core):
+        print(data)
+        print(type(data))
+        connect_args = {'ssl':{'fake_flag_to_enable_tls': True}}
+
+        #&verifyServerCertificate=true&useSSL=true&requireSSL=true
+        engine = create_engine(f'mysql+pymysql://{self.user}:{self.passwd}@{self.host}:{self.port}/{self.db}?charset=utf8mb4', echo=False , connect_args = connect_args)
+        data.to_sql(name=self.table, con=engine, if_exists='append', index=False)
+        
+    
+
+def print_output(data: str):
+    print(f'{"*" * (len(data) + 2)}\n* {data} *\n{"*" * (len(data) + 2)}')
+
+
+class AWSCONNECTION:
+    def get_connection(self, service_name: str, service_type: str, region="us-east-1") -> classmethod:
+        conn = ''
+
+        if service_type == "client":
+            conn = boto3.client(service_name, region_name=region)
+        elif service_type == "resource":
+            conn = boto3.resource(service_name, region_name=region)
+        else:
+            print(f'The service type does not match')
+
+        return conn
+
+
+def main():
+    print_output("Starting Glue Job")
+    
+    s3_client = AWSCONNECTION().get_connection("s3", "client")
+
+    s3_start = Start(s3_client)
+    
+
+    print_output("Reading data from S3 & creating connection to DB")
+    db_start = DB()
+    db_start.input_data_to_sql(s3_start.get_s3_object_data())
+
+    print_output("Run Complete")
+
+
+if __name__ == '__main__':
+    main()
